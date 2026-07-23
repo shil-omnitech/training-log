@@ -78,7 +78,26 @@ a{color:var(--blue)}
   border-radius:3px;margin-bottom:6px;width:100%;text-align:left}
 .extra.on{outline:1.5px solid var(--green)}
 .extra .nm{flex:1;font-size:14px}
-.extra .mm{font-family:var(--mono);font-size:11px;color:var(--steel);white-space:nowrap}
+.extra .mm{font-family:var(--mono);font-size:11px;color:var(--steel);white-space:nowrap;display:block}
+.stepper{display:flex;align-items:center;gap:2px;flex:0 0 auto}
+.stepper button{width:34px;height:34px;border:1px solid var(--edge);border-radius:3px;
+  font-family:var(--disp);font-size:20px;line-height:1;color:var(--chalk)}
+.stepper button:active{background:var(--edge)}
+.stepper .ct{font-family:var(--disp);font-weight:700;font-size:20px;min-width:26px;
+  text-align:center;font-variant-numeric:tabular-nums}
+.stepper .ct.zero{color:var(--steel)}
+.extra .kill{flex:0 0 auto;width:26px;color:var(--steel);font-size:17px;line-height:1}
+.addrow{background:var(--slab);border-radius:3px;padding:12px}
+.addrow input{width:100%;padding:10px;background:var(--ink);border:1px solid var(--edge);
+  border-radius:3px;color:var(--chalk);font-family:var(--body);font-size:14px}
+.macroin{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}
+.macroin input{text-align:center;font-family:var(--mono);font-size:13px}
+.addrow .act{margin-top:8px}
+.backbar{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.backbar button{padding:9px 14px;border:1px solid var(--edge);border-radius:3px;
+  font-family:var(--mono);font-size:12px;color:var(--steel)}
+.foodbar{display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  font-family:var(--mono);font-size:12px;color:var(--steel);margin-top:14px}
 
 /* ---------- week phase ---------- */
 .weekpick{display:flex;gap:6px;margin-bottom:14px}
@@ -175,6 +194,19 @@ nav .badge{font-family:var(--mono);font-size:10px;color:var(--ink);background:va
     <div id="mealList"></div>
     <div class="eyebrow">Top-ups</div>
     <div id="extraList"></div>
+
+    <div class="eyebrow">Add your own</div>
+    <div class="addrow">
+      <input id="cName" placeholder="What you ate" autocomplete="off">
+      <div class="macroin">
+        <input id="cP" type="number" inputmode="decimal" placeholder="protein g">
+        <input id="cC" type="number" inputmode="decimal" placeholder="carbs g">
+        <input id="cF" type="number" inputmode="decimal" placeholder="fat g">
+      </div>
+      <button class="act ghost" id="btnAdd">Add to my list</button>
+      <div class="hint" id="addHint">Saved for next time too, so you only enter it once.</div>
+    </div>
+
     <button class="act ghost" id="btnReset">Reset day</button>
   </section>
 
@@ -183,6 +215,7 @@ nav .badge{font-family:var(--mono);font-size:10px;color:var(--ink);background:va
   <section class="panel" id="p-sync">
     <div class="eyebrow">Waiting to send</div>
     <div class="stat"><div class="big" id="qCount">0</div><div class="lbl">sets</div></div>
+    <div class="stat"><div class="big" id="fCount">0</div><div class="lbl">food days</div></div>
     <button class="act" id="btnSync">Send to sheet</button>
     <div class="eyebrow">Sheet endpoint</div>
     <input type="url" id="endpoint" placeholder="https://script.google.com/macros/s/.../exec">
@@ -635,7 +668,7 @@ const WORKOUTS = {
 
 <script>
 const WD = ["sun","mon","tue","wed","thu","fri","sat"];
-const K = { queue:"tb.queue", hist:"tb.hist", url:"tb.url", sess:"tb.sess", pick:"tb.pick", phase:"tb.phase" };
+const K = { queue:"tb.queue", hist:"tb.hist", url:"tb.url", sess:"tb.sess", pick:"tb.pick", phase:"tb.phase", fqueue:"tb.fqueue", custom:"tb.custom" };
 const PHASES = [["w1","Week 1"],["w23","Week 2–3"],["w412","Week 4–12"]];
 
 const load = (k,d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
@@ -652,8 +685,13 @@ let queue = load(K.queue, []);
 let hist  = load(K.hist, {});
 let sess  = load(K.sess, null);
 let phase = load(K.phase, "w23");
-let pick  = load(K.pick, null);
+let pick   = load(K.pick, null);
+let fqueue = load(K.fqueue, []);   // one snapshot row per day
+let custom = load(K.custom, []);   // foods you added yourself, kept for reuse
 let timer = null, timeLeft = 0;
+let picking = false;               // showing the day chooser mid-session
+
+const allExtras = () => EXTRAS.concat(custom);
 
 const freshDay = () => {
   const p = { stamp: stamp(), opt:{}, extras:{} };
@@ -668,8 +706,36 @@ const lifts = day => WORKOUTS[day].items.filter(i => i.type === "lift");
 function dayTotal(){
   const t = [0,0,0];
   MEALS.forEach(m => m.options[pick.opt[m.name] ?? 0].macros.forEach((v,i) => t[i] += v));
-  EXTRAS.forEach(x => { const n = pick.extras[x.name] || 0; if (n) x.macros.forEach((v,i) => t[i] += v*n); });
+  allExtras().forEach(x => { const n = pick.extras[x.name] || 0; if (n) x.macros.forEach((v,i) => t[i] += v*n); });
   return t.map(r1);
+}
+
+/* One row per day, rewritten in place as the day goes on. The sheet upserts on
+   id, so today's row updates rather than piling up duplicates. */
+function updateFood(){
+  const t = dayTotal();
+  const left = k => { const i = {p:0,c:1,f:2}[k]; return r1(Math.max(0, TARGET[k][0] - t[i])); };
+  const chosen = {};
+  MEALS.forEach(m => chosen[m.name] = m.options[pick.opt[m.name] ?? 0].label);
+  const tops = allExtras()
+    .filter(x => pick.extras[x.name])
+    .map(x => x.name + (pick.extras[x.name] > 1 ? " ×" + pick.extras[x.name] : ""))
+    .join("; ");
+
+  const row = {
+    id: "food-" + pick.stamp,
+    date: pick.stamp,
+    protein_g: t[0], carbs_g: t[1], fat_g: t[2], calories: +kcal(t).toFixed(0),
+    protein_left: left("p"), carbs_left: left("c"), fat_left: left("f"),
+    breakfast: chosen["Breakfast"] || "", lunch: chosen["Lunch"] || "",
+    post_workout: chosen["Post-workout"] || "", dinner: chosen["Dinner"] || "",
+    top_ups: tops,
+    updated_at: new Date().toTimeString().slice(0,5)
+  };
+  const i = fqueue.findIndex(f => f.id === row.id);
+  if (i >= 0) fqueue[i] = row; else fqueue.push(row);
+  save(K.fqueue, fqueue);
+  refreshBadge();
 }
 
 function renderTally(){
@@ -722,7 +788,7 @@ function renderMeals(){
       const pills = el("div","pills");
       m.options.forEach((op,j) => {
         const b = el("button", j === i ? "on" : "", op.label);
-        b.onclick = () => { pick.opt[m.name] = j; save(K.pick,pick); renderMeals(); renderTally(); };
+        b.onclick = () => { pick.opt[m.name] = j; save(K.pick,pick); renderMeals(); renderTally(); updateFood(); };
         pills.append(b);
       });
       card.append(pills);
@@ -736,18 +802,63 @@ function renderMeals(){
   });
 }
 
+function bumpExtra(name, d){
+  const n = Math.max(0, (pick.extras[name] || 0) + d);
+  if (n) pick.extras[name] = n; else delete pick.extras[name];
+  save(K.pick, pick);
+  renderExtras(); renderTally(); updateFood();
+}
+
 function renderExtras(){
   const box = $("#extraList"); box.innerHTML = "";
-  EXTRAS.forEach(x => {
+  const mine = new Set(custom.map(c => c.name));
+
+  allExtras().forEach(x => {
     const n = pick.extras[x.name] || 0;
-    const b = el("button","extra" + (n ? " on" : ""));
-    b.append(el("div","nm", x.name + (n > 1 ? ` ×${n}` : "")));
-    b.append(el("div","mm", `${x.macros[0]}p · ${x.macros[1]}c · ${x.macros[2]}f`));
-    b.onclick = () => { pick.extras[x.name] = n+1; save(K.pick,pick); renderExtras(); renderTally(); };
-    b.oncontextmenu = e => { e.preventDefault(); pick.extras[x.name] = Math.max(0,n-1); save(K.pick,pick); renderExtras(); renderTally(); };
-    box.append(b);
+    const row = el("div","extra" + (n ? " on" : ""));
+
+    const nm = el("div","nm", x.name);
+    nm.append(el("small","mm", `${x.macros[0]}p · ${x.macros[1]}c · ${x.macros[2]}f`));
+    row.append(nm);
+
+    if (mine.has(x.name)){
+      const kill = el("button","kill","×");
+      kill.title = "Remove from my list";
+      kill.onclick = () => {
+        if (!confirm("Remove \"" + x.name + "\" from your list?")) return;
+        custom = custom.filter(c => c.name !== x.name);
+        delete pick.extras[x.name];
+        save(K.custom, custom); save(K.pick, pick);
+        renderExtras(); renderTally(); updateFood();
+      };
+      row.append(kill);
+    }
+
+    const st = el("div","stepper");
+    const minus = el("button","","\u2212"); minus.onclick = () => bumpExtra(x.name, -1);
+    const ct = el("span","ct" + (n ? "" : " zero"), n);
+    const plus = el("button","","+"); plus.onclick = () => bumpExtra(x.name, 1);
+    st.append(minus, ct, plus);
+    row.append(st);
+    box.append(row);
   });
-  box.append(el("div","empty","Tap to add one. Press and hold to take one off."));
+}
+
+function addCustom(){
+  const name = $("#cName").value.trim();
+  const p = +$("#cP").value || 0, c = +$("#cC").value || 0, f = +$("#cF").value || 0;
+  const hint = $("#addHint");
+  if (!name){ hint.textContent = "Give it a name first."; return; }
+  if (!p && !c && !f){ hint.textContent = "Add at least one macro, or it won't count toward anything."; return; }
+  if (allExtras().some(x => x.name.toLowerCase() === name.toLowerCase())){
+    hint.textContent = "You already have something called that."; return;
+  }
+  custom.push({ name, macros:[r1(p), r1(c), r1(f)] });
+  save(K.custom, custom);
+  pick.extras[name] = 1; save(K.pick, pick);
+  $("#cName").value = $("#cP").value = $("#cC").value = $("#cF").value = "";
+  hint.textContent = "Added, and counted once for today.";
+  renderExtras(); renderTally(); updateFood();
 }
 
 function renderHeader(){
@@ -773,7 +884,7 @@ function startRest(secs){
 
 function fig(key){ const d = el("div"); d.innerHTML = figureSVG(key); return d.firstChild; }
 
-function startSession(wd){ stopTimer(); sess = { wd, idx:0, sets:{} }; save(K.sess,sess); renderTrain(); }
+function startSession(wd){ stopTimer(); picking = false; sess = { wd, idx:0, sets:{} }; save(K.sess,sess); renderTrain(); }
 
 function renderTrain(){
   const box = $("#trainBody"); box.innerHTML = "";
@@ -786,8 +897,15 @@ function renderTrain(){
   });
   box.append(wk);
 
-  if (!sess){
-    box.append(el("div","eyebrow","Start a session"));
+  if (!sess || picking){
+    if (sess && picking){
+      const bar = el("div","backbar");
+      const back = el("button","","\u2039 Back to " + WORKOUTS[sess.wd].name);
+      back.onclick = () => { picking = false; renderTrain(); };
+      bar.append(back);
+      box.append(bar);
+    }
+    box.append(el("div","eyebrow", sess ? "Switch day" : "Start a session"));
     Object.keys(WORKOUTS).forEach(k => {
       const b = el("button","ex" + (k === todayWd() ? " active" : ""));
       const th = el("div","thumb"); th.append(fig(WORKOUTS[k].items.find(i=>i.type==="lift").fig));
@@ -795,13 +913,25 @@ function renderTrain(){
       nm.append(el("small","", k.charAt(0).toUpperCase()+k.slice(1) + " · " + lifts(k).length + " exercises"));
       b.append(th, nm);
       if (k === todayWd()) b.append(el("div","done","today"));
-      b.onclick = () => startSession(k);
+      b.onclick = () => {
+        if (sess && k === sess.wd){ picking = false; renderTrain(); return; }
+        if (sess && Object.keys(sess.sets).length &&
+            !confirm("Switch to " + WORKOUTS[k].name + "? Sets you've logged are already saved, but this session ends.")) return;
+        picking = false; startSession(k);
+      };
       box.append(b);
     });
     return;
   }
 
   const plan = WORKOUTS[sess.wd], it = plan.items[sess.idx];
+
+  const bar = el("div","backbar");
+  const toDays = el("button","","\u2039 Days");
+  toDays.onclick = () => { stopTimer(); picking = true; renderTrain(); };
+  bar.append(toDays);
+  box.append(bar);
+
   const stage = el("div","stage");
   stage.append(el("div","eyebrow", `${plan.name} · ${sess.idx+1} of ${plan.items.length}`));
   stage.append(el("h2","", it.name));
@@ -869,7 +999,7 @@ function renderTrain(){
   box.append(list);
 
   const end = el("button","act ghost","End session");
-  end.onclick = () => { if (confirm("End session? Logged sets are already saved.")){ stopTimer(); sess=null; save(K.sess,null); renderTrain(); } };
+  end.onclick = () => { if (confirm("End session? Logged sets are already saved.")){ stopTimer(); picking=false; sess=null; save(K.sess,null); renderTrain(); } };
   box.append(end);
 }
 
@@ -894,7 +1024,7 @@ function move(d){
   if (n < 0) return;
   if (n >= plan.items.length){
     alert("Session complete. " + queue.length + " sets waiting to sync.");
-    sess = null; save(K.sess,null); renderTrain(); go("sync"); return;
+    picking = false; sess = null; save(K.sess,null); renderTrain(); go("sync"); return;
   }
   sess.idx = n; save(K.sess,sess); renderTrain();
 }
@@ -924,17 +1054,19 @@ function logSet(){
 /* ============================ sync ============================ */
 function refreshBadge(){
   $("#qCount").textContent = queue.length;
-  const b = $("#navBadge"); b.hidden = queue.length === 0; b.textContent = queue.length;
+  const f = $("#fCount"); if (f) f.textContent = fqueue.length;
+  const total = queue.length + fqueue.length;
+  const b = $("#navBadge"); b.hidden = total === 0; b.textContent = total;
 }
 
 async function sync(){
   const url = load(K.url,"");
   if (!url) { note("Add your endpoint below first."); return; }
-  if (!queue.length) { note("Nothing waiting."); return; }
 
-  const body = JSON.stringify({ rows: queue });
-  const n = queue.length;
-  note("Sending " + n + " sets…");
+  if (!queue.length && !fqueue.length) { note("Nothing waiting."); return; }
+  const body = JSON.stringify({ rows: queue, food: fqueue });
+  const n = queue.length, fn = fqueue.length;
+  note("Sending " + n + " sets and " + fn + " food day" + (fn === 1 ? "" : "s") + "…");
 
   // Preferred path: a normal request we can read the answer to, so the queue
   // only clears once the sheet confirms the write.
@@ -946,8 +1078,11 @@ async function sync(){
     });
     const out = await res.json();
     if (!out.ok) throw new Error(out.error || "sheet refused the write");
-    queue = []; save(K.queue,queue); refreshBadge();
-    note("Sent " + out.added + " sets at " + new Date().toLocaleTimeString());
+    queue = []; save(K.queue,queue);
+    fqueue = []; save(K.fqueue,fqueue);
+    refreshBadge(); updateFood();   // today's row is rebuilt straight away
+    note("Sent " + out.added + " sets and " + (out.foodAdded || 0) + " food day"
+       + ((out.foodAdded === 1) ? "" : "s") + " at " + new Date().toLocaleTimeString());
     return;
   } catch (err) {
     if (!navigator.onLine) {
@@ -964,7 +1099,7 @@ async function sync(){
   try {
     await fetch(url, { method:"POST", mode:"no-cors",
                        headers:{"Content-Type":"text/plain;charset=utf-8"}, body });
-    note("Sent " + n + " sets, but your browser wouldn't let me read the reply.\n\n"
+    note("Sent " + n + " sets and " + fn + " food day(s), but your browser wouldn't let me read the reply.\n\n"
        + "Check the sheet. If the rows are there, hit 'Clear queue after pasting' below.\n"
        + "If they aren't, use 'Copy rows for pasting' instead.");
   } catch {
@@ -1001,9 +1136,11 @@ async function copyRows(){
 }
 
 function clearQueue(){
-  if (!queue.length) { note("Queue is already empty."); return; }
-  if (!confirm("Clear " + queue.length + " rows? Do this only once they're safely in the sheet.")) return;
-  queue = []; save(K.queue, queue); refreshBadge();
+  if (!queue.length && !fqueue.length) { note("Queue is already empty."); return; }
+  if (!confirm("Clear " + queue.length + " set rows and " + fqueue.length + " food row(s)? Do this only once they're safely in the sheet.")) return;
+  queue = []; save(K.queue, queue);
+  fqueue = []; save(K.fqueue, fqueue);
+  refreshBadge(); updateFood();
   $("#tsvOut").hidden = true;
   note("Queue cleared.");
 }
@@ -1019,9 +1156,10 @@ $("#btnSync").onclick = sync;
 $("#btnSave").onclick = () => { const v = $("#endpoint").value.trim(); if (v) { save(K.url,v); note("Endpoint saved."); } };
 $("#btnCopy").onclick = copyRows;
 $("#btnClear").onclick = clearQueue;
-$("#btnReset").onclick = () => { pick = freshDay(); save(K.pick,pick); renderMeals(); renderExtras(); renderTally(); };
+$("#btnReset").onclick = () => { pick = freshDay(); save(K.pick,pick); renderMeals(); renderExtras(); renderTally(); updateFood(); };
+$("#btnAdd").onclick = addCustom;
 
-renderHeader(); renderMeals(); renderExtras(); renderTally(); refreshBadge();
+renderHeader(); renderMeals(); renderExtras(); renderTally(); updateFood(); refreshBadge();
 $("#endpoint").value = load(K.url,"");
 if (sess) go("train");
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
