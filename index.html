@@ -190,6 +190,9 @@ nav .badge{font-family:var(--mono);font-size:10px;color:var(--ink);background:va
 
 <main>
   <section class="panel on" id="p-meals">
+    <button class="act" id="btnEndDay">End the day</button>
+    <div class="hint" id="dayState"></div>
+
     <div class="eyebrow">Day total</div>
     <div class="tally" id="tally"></div>
     <div class="eyebrow">Meals</div>
@@ -209,9 +212,6 @@ nav .badge{font-family:var(--mono);font-size:10px;color:var(--ink);background:va
       <div class="hint" id="addHint">Saved for next time too, so you only enter it once.</div>
     </div>
 
-    <div class="eyebrow">Finish up</div>
-    <button class="act" id="btnEndDay">End the day</button>
-    <div class="hint" id="dayState"></div>
     <button class="act ghost" id="btnReset">Start today over</button>
   </section>
 
@@ -226,6 +226,7 @@ nav .badge{font-family:var(--mono);font-size:10px;color:var(--ink);background:va
     <input type="url" id="endpoint" placeholder="https://script.google.com/macros/s/.../exec">
     <button class="act ghost" id="btnSave">Save endpoint</button>
     <div class="note" id="syncNote"></div>
+    <div class="hint" id="buildTag"></div>
 
     <div class="eyebrow">Or paste it in yourself</div>
     <div class="hint">No Apps Script needed. Copies your sets, tab-separated, ready to paste
@@ -678,9 +679,26 @@ const WORKOUTS = {
 </script>
 
 <script>
+const BUILD = "2026-07-23 · v9";
+
+/* Bump RESET_TOKEN to force every phone to start clean on the next load.
+   It fires once per token, so a normal update leaves your data alone. */
+const RESET_TOKEN = "2026-07-23-fresh-start";
+
 const WD = ["sun","mon","tue","wed","thu","fri","sat"];
 const K = { queue:"tb.queue", hist:"tb.hist", url:"tb.url", sess:"tb.sess", pick:"tb.pick", phase:"tb.phase", fqueue:"tb.fqueue", custom:"tb.custom" };
 const PHASES = [["w1","Week 1"],["w23","Week 2–3"],["w412","Week 4–12"]];
+
+/* Runs before any state is read, so nothing stale survives it. */
+(function oneTimeWipe(){
+  try {
+    if (localStorage.getItem("tb.reset") === RESET_TOKEN) return;
+    const keep = localStorage.getItem("tb.url");   // endpoint is worth keeping
+    Object.values(K).forEach(k => localStorage.removeItem(k));
+    if (keep) localStorage.setItem("tb.url", keep);
+    localStorage.setItem("tb.reset", RESET_TOKEN);
+  } catch {}
+})();
 
 const load = (k,d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const save = (k,v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
@@ -1169,6 +1187,7 @@ function wipeAll(){
   const keep = load(K.url, "");
   Object.values(K).forEach(k => localStorage.removeItem(k));
   if (keep) save(K.url, keep);
+  localStorage.setItem("tb.reset", RESET_TOKEN);   // don't re-trigger the auto wipe
   location.reload();
 }
 
@@ -1209,6 +1228,7 @@ $("#btnEndDay").onclick = () => {
 
 renderHeader(); renderMeals(); renderExtras(); renderTally(); refreshBadge(); renderDayState();
 $("#endpoint").value = load(K.url,"");
+$("#buildTag").textContent = "Build " + BUILD;
 if (sess) go("train");
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
