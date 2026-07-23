@@ -1,6 +1,6 @@
 // Caches the app shell so it opens with no signal.
 // Bump CACHE when you edit index.html, or the old version sticks around.
-const CACHE = "trainlog-v7";
+const CACHE = "trainlog-v8";
 const SHELL = ["./", "./index.html", "./manifest.json"];
 
 self.addEventListener("install", e => {
