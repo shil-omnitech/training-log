@@ -24,7 +24,7 @@
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%}
 body{background:var(--ink);color:var(--chalk);font-family:var(--body);font-size:15px;
-  line-height:1.45;padding-bottom:calc(64px + env(safe-area-inset-bottom));overscroll-behavior-y:contain}
+  line-height:1.45;padding-bottom:calc(110px + env(safe-area-inset-bottom));overscroll-behavior-y:contain}
 button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 a{color:var(--blue)}
 
@@ -88,10 +88,10 @@ a{color:var(--blue)}
 .stepper .ct.zero{color:var(--steel)}
 .extra .kill{flex:0 0 auto;width:26px;color:var(--steel);font-size:17px;line-height:1}
 .addrow{background:var(--slab);border-radius:3px;padding:12px}
-.addrow input{width:100%;padding:10px;background:var(--ink);border:1px solid var(--edge);
-  border-radius:3px;color:var(--chalk);font-family:var(--body);font-size:14px}
+.addrow input{width:100%;padding:11px;background:var(--ink);border:1px solid var(--edge);
+  border-radius:3px;color:var(--chalk);font-family:var(--body);font-size:16px}
 .macroin{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}
-.macroin input{text-align:center;font-family:var(--mono);font-size:13px}
+.macroin input{text-align:center;font-family:var(--mono);font-size:16px}
 .addrow .act{margin-top:8px}
 .backbar{display:flex;align-items:center;gap:10px;margin-bottom:12px}
 .backbar button{padding:9px 14px;border:1px solid var(--edge);border-radius:3px;
@@ -158,10 +158,12 @@ a{color:var(--blue)}
 .stat .big{font-family:var(--disp);font-weight:700;font-size:56px;line-height:.9}
 .stat .lbl{color:var(--steel);font-size:14px}
 input[type=url]{width:100%;padding:12px;background:var(--slab);border:1px solid var(--edge);
-  border-radius:3px;color:var(--chalk);font-family:var(--mono);font-size:12.5px}
+  border-radius:3px;color:var(--chalk);font-family:var(--mono);font-size:16px}
+input,select,textarea{font-size:16px}   /* below 16px iOS zooms the page on focus */
 .act{width:100%;margin-top:10px;padding:15px 0;border-radius:3px;font-family:var(--disp);
   font-weight:600;font-size:19px;letter-spacing:.05em;text-transform:uppercase;background:var(--blue)}
 .act.ghost{background:none;border:1px solid var(--edge);color:var(--steel)}
+.act.danger{background:none;border:1px solid var(--red);color:var(--red)}
 .note{font-family:var(--mono);font-size:12px;color:var(--steel);margin-top:12px;white-space:pre-wrap}
 .hint{font-size:13px;color:var(--steel);margin-bottom:2px;line-height:1.5}
 #tsvOut{width:100%;height:140px;margin-top:10px;padding:10px;background:var(--slab);
@@ -187,7 +189,7 @@ nav .badge{font-family:var(--mono);font-size:10px;color:var(--ink);background:va
 </header>
 
 <main>
-  <section class="panel on" id="p-today">
+  <section class="panel on" id="p-meals">
     <div class="eyebrow">Day total</div>
     <div class="tally" id="tally"></div>
     <div class="eyebrow">Meals</div>
@@ -207,7 +209,10 @@ nav .badge{font-family:var(--mono);font-size:10px;color:var(--ink);background:va
       <div class="hint" id="addHint">Saved for next time too, so you only enter it once.</div>
     </div>
 
-    <button class="act ghost" id="btnReset">Reset day</button>
+    <div class="eyebrow">Finish up</div>
+    <button class="act" id="btnEndDay">End the day</button>
+    <div class="hint" id="dayState"></div>
+    <button class="act ghost" id="btnReset">Start today over</button>
   </section>
 
   <section class="panel" id="p-train"><div id="trainBody"></div></section>
@@ -228,11 +233,17 @@ nav .badge{font-family:var(--mono);font-size:10px;color:var(--ink);background:va
     <button class="act ghost" id="btnCopy">Copy rows for pasting</button>
     <textarea id="tsvOut" hidden readonly></textarea>
     <button class="act ghost" id="btnClear">Clear queue after pasting</button>
+
+    <div class="eyebrow">Start over</div>
+    <div class="hint">Wipes everything stored on this phone: queued sets, food rows,
+      today's choices, your custom foods and your lifting history. Anything already
+      in your sheet stays there. Your endpoint is kept so you don't have to paste it again.</div>
+    <button class="act danger" id="btnWipe">Reset the app</button>
   </section>
 </main>
 
 <nav>
-  <button class="on" data-go="today">Today</button>
+  <button class="on" data-go="meals">Meals</button>
   <button data-go="train">Train</button>
   <button data-go="sync">Sync<span class="badge" id="navBadge" hidden></span></button>
 </nav>
@@ -710,9 +721,10 @@ function dayTotal(){
   return t.map(r1);
 }
 
-/* One row per day, rewritten in place as the day goes on. The sheet upserts on
-   id, so today's row updates rather than piling up duplicates. */
-function updateFood(){
+/* Builds today's nutrition row. Only called when you tap End the day -- nothing
+   reaches the Sync tab before that. The sheet upserts on id, so ending the day
+   twice updates the same row rather than adding a second one. */
+function submitDay(){
   const t = dayTotal();
   const left = k => { const i = {p:0,c:1,f:2}[k]; return r1(Math.max(0, TARGET[k][0] - t[i])); };
   const chosen = {};
@@ -733,9 +745,21 @@ function updateFood(){
     updated_at: new Date().toTimeString().slice(0,5)
   };
   const i = fqueue.findIndex(f => f.id === row.id);
-  if (i >= 0) fqueue[i] = row; else fqueue.push(row);
+  const again = i >= 0;
+  if (again) fqueue[i] = row; else fqueue.push(row);
   save(K.fqueue, fqueue);
-  refreshBadge();
+  refreshBadge(); renderDayState();
+  return again;
+}
+
+function renderDayState(){
+  const done = fqueue.some(f => f.id === "food-" + pick.stamp);
+  const btn = $("#btnEndDay"), st = $("#dayState");
+  if (!btn) return;
+  btn.textContent = done ? "Update today's numbers" : "End the day";
+  st.textContent = done
+    ? "Today's totals are queued. Send them from the Sync tab whenever you like."
+    : "Nothing is sent to your sheet until you tap this.";
 }
 
 function renderTally(){
@@ -788,7 +812,7 @@ function renderMeals(){
       const pills = el("div","pills");
       m.options.forEach((op,j) => {
         const b = el("button", j === i ? "on" : "", op.label);
-        b.onclick = () => { pick.opt[m.name] = j; save(K.pick,pick); renderMeals(); renderTally(); updateFood(); };
+        b.onclick = () => { pick.opt[m.name] = j; save(K.pick,pick); renderMeals(); renderTally(); };
         pills.append(b);
       });
       card.append(pills);
@@ -806,7 +830,7 @@ function bumpExtra(name, d){
   const n = Math.max(0, (pick.extras[name] || 0) + d);
   if (n) pick.extras[name] = n; else delete pick.extras[name];
   save(K.pick, pick);
-  renderExtras(); renderTally(); updateFood();
+  renderExtras(); renderTally();
 }
 
 function renderExtras(){
@@ -829,7 +853,7 @@ function renderExtras(){
         custom = custom.filter(c => c.name !== x.name);
         delete pick.extras[x.name];
         save(K.custom, custom); save(K.pick, pick);
-        renderExtras(); renderTally(); updateFood();
+        renderExtras(); renderTally();
       };
       row.append(kill);
     }
@@ -858,7 +882,7 @@ function addCustom(){
   pick.extras[name] = 1; save(K.pick, pick);
   $("#cName").value = $("#cP").value = $("#cC").value = $("#cF").value = "";
   hint.textContent = "Added, and counted once for today.";
-  renderExtras(); renderTally(); updateFood();
+  renderExtras(); renderTally();
 }
 
 function renderHeader(){
@@ -1080,7 +1104,7 @@ async function sync(){
     if (!out.ok) throw new Error(out.error || "sheet refused the write");
     queue = []; save(K.queue,queue);
     fqueue = []; save(K.fqueue,fqueue);
-    refreshBadge(); updateFood();   // today's row is rebuilt straight away
+    refreshBadge(); renderDayState();
     note("Sent " + out.added + " sets and " + (out.foodAdded || 0) + " food day"
        + ((out.foodAdded === 1) ? "" : "s") + " at " + new Date().toLocaleTimeString());
     return;
@@ -1135,12 +1159,25 @@ async function copyRows(){
   }
 }
 
+function wipeAll(){
+  if (!confirm("Reset the app? Everything stored on this phone is deleted -- queued sets, "
+             + "food rows, custom foods and lifting history.\n\nThis cannot be undone.")) return;
+  if (queue.length || fqueue.length){
+    if (!confirm("You still have " + queue.length + " set(s) and " + fqueue.length
+               + " food row(s) that were never sent. Delete those too?")) return;
+  }
+  const keep = load(K.url, "");
+  Object.values(K).forEach(k => localStorage.removeItem(k));
+  if (keep) save(K.url, keep);
+  location.reload();
+}
+
 function clearQueue(){
   if (!queue.length && !fqueue.length) { note("Queue is already empty."); return; }
   if (!confirm("Clear " + queue.length + " set rows and " + fqueue.length + " food row(s)? Do this only once they're safely in the sheet.")) return;
   queue = []; save(K.queue, queue);
   fqueue = []; save(K.fqueue, fqueue);
-  refreshBadge(); updateFood();
+  refreshBadge(); renderDayState();
   $("#tsvOut").hidden = true;
   note("Queue cleared.");
 }
@@ -1156,10 +1193,21 @@ $("#btnSync").onclick = sync;
 $("#btnSave").onclick = () => { const v = $("#endpoint").value.trim(); if (v) { save(K.url,v); note("Endpoint saved."); } };
 $("#btnCopy").onclick = copyRows;
 $("#btnClear").onclick = clearQueue;
-$("#btnReset").onclick = () => { pick = freshDay(); save(K.pick,pick); renderMeals(); renderExtras(); renderTally(); updateFood(); };
+$("#btnWipe").onclick = wipeAll;
+$("#btnReset").onclick = () => {
+  if (!confirm("Start today over? Your meal choices and top-ups for today are cleared.")) return;
+  pick = freshDay(); save(K.pick,pick);
+  renderMeals(); renderExtras(); renderTally(); renderDayState();
+};
 $("#btnAdd").onclick = addCustom;
+$("#btnEndDay").onclick = () => {
+  const again = submitDay();
+  go("sync");
+  note((again ? "Today's numbers updated." : "Today's food is queued.")
+     + " Hit Send to sheet when you're ready.");
+};
 
-renderHeader(); renderMeals(); renderExtras(); renderTally(); updateFood(); refreshBadge();
+renderHeader(); renderMeals(); renderExtras(); renderTally(); refreshBadge(); renderDayState();
 $("#endpoint").value = load(K.url,"");
 if (sess) go("train");
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
